@@ -3,15 +3,15 @@
 
   compact-check [--threshold N] [--idle-seconds S] [--json] [--ask-wiki]
 
-Reads the org chart, `orca agent list --json` and, for terminal Claude agents, the transcript
-(<config dir>/projects/*/<session>.jsonl; CLAUDE_CONFIG_DIR or ~/.claude). One is due when it is awake, over
-the threshold (default 300000) and `done` for at least --idle-seconds (default 120). Sleepers are skipped.
+Reads the org chart, `orca agent list --json` and the transcript path the plugin's SessionStart hook recorded
+for each agent (an Orca session id does not name a transcript). So there is no count until the session has
+started with the plugin. One is due when it is awake, over the threshold (default 300000) and `done` for at
+least --idle-seconds (default 120). Sleepers are skipped.
 
 It never compacts: Orca has no CLI or API for that (stablyai/orca#46875), and an agent cannot run /compact on
 itself. --ask-wiki messages each due one to write its wiki, and you then type /compact in that chat.
-Native chats are listed without a token count, because Orca does not expose their transcript.
 """
-import argparse, glob, json, os, sys
+import argparse, json, sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -22,14 +22,6 @@ MESSAGE = ("compact-check: your context is over the threshold and you are idle. 
            "(wiki now --set -, and a wiki log line for anything new), then say it is safe to compact.")
 
 
-def transcript_tokens(session):
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    hits = glob.glob(str(base / "projects" / "*" / f"{glob.escape(session)}.jsonl"))
-    if not hits:
-        return None
-    return lib.context_tokens(max(hits, key=os.path.getmtime))
-
-
 def main(argv):
     p = argparse.ArgumentParser(prog="compact-check", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--threshold", type=int, default=300_000)
@@ -38,7 +30,7 @@ def main(argv):
     p.add_argument("--ask-wiki", action="store_true")
     a = p.parse_args(argv)
     try:
-        eligible, report = lib.compact_candidates(lib.org_rows(lib.home_repo()), lib.orca_agents(), transcript_tokens,
+        eligible, report = lib.compact_candidates(lib.org_rows(lib.home_repo()), lib.orca_agents(),
                                                   threshold=a.threshold, idle_seconds=a.idle_seconds)
         if a.json:
             print(json.dumps({"due": [e["name"] for e in eligible], "rows": report}, indent=2))

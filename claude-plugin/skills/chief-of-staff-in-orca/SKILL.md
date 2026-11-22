@@ -32,14 +32,18 @@ sleep; the wiki is what survives.
 ## Starting a worker
 
 1. Give it **one goal and a definition of done**. A worker without one never ends.
-2. Start it as a **child** of your worktree (`--parent-worktree`), not a sibling, in a worktree of the
-   app repo the task touches (for example app repo A). A sibling only when the work becomes its own
-   initiative, which then gets its own coordinator.
-3. Title it with the worker marker, so the question gate knows it is a worker.
-4. Model: pass `--model` yourself when it matters (a smaller model for a well-defined task, the strongest
-   for a review). The Orca plugin's policy fills it in only when the worker's workspace already has a
-   role, which a brand new child worktree does not.
-5. Tell it how to finish: `child-done --parent <your slug>` with its summary.
+2. Start it with `child-start`, in the app repo the task touches (for example app repo A), with the spec
+   on stdin or in a file:
+
+   `child-start --name "<task>" --repo <selector> --spec-file <file>`
+
+   It makes a **child** worktree with the worker marker in its name and "child of <you>" as its comment,
+   and appends to the spec how to ask and the exact hand-back command. Try `--dry-run` first.
+3. Model: `--role worker` (the default) runs on sonnet, `--role reviewer` on opus. `--model <alias>` wins,
+   and `--effort` is passed only when you give it.
+4. A start that does not report ready may still have made a worker. Look with
+   `orca orchestration worker-list` before you start it again.
+5. A sibling only when the work becomes its own initiative, which then gets its own coordinator.
 
 ## Taking a hand-back
 

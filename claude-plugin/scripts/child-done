@@ -38,22 +38,23 @@ def main(argv):
             wiki, parent_name, session = lib.wiki_of(home, row), lib.display_name(row["name"]), row["session"]
         else:
             wiki, parent_name, session = lib.wiki_dir(home, lib.slugify(a.parent)), a.parent, ""
-        stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
-        handback = wiki / "handbacks" / f"{stamp}-{lib.slugify(a.name)}.md"
-        count = 1
-        while handback.exists():
-            count += 1
-            handback = handback.with_name(f"{stamp}-{lib.slugify(a.name)}-{count}.md")
-        first = summary.splitlines()[0].lstrip("# ").strip()[:300]
-        day, line = lib.log_line(f"Hand-back from {a.name}: {first} (handbacks/{handback.name})", "finding", frm=a.name)
-        print(f"{'would write' if a.dry_run else 'write'}: {handback}")
-        print(f"{'would log' if a.dry_run else 'log'}: {line}")
-        if not a.dry_run:
-            lib.ensure_wiki(wiki, parent_name)
-            handback.parent.mkdir(parents=True, exist_ok=True)
-            handback.write_text(summary + "\n", encoding="utf-8")
-            log = wiki / "log.md"
-            log.write_text(lib.append_log(log.read_text(encoding="utf-8"), day, line), encoding="utf-8")
+        # One lock from choosing the file name to the log line, so parallel hand-backs keep both.
+        with lib.locked(wiki, on=not a.dry_run):
+            stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
+            handback = wiki / "handbacks" / f"{stamp}-{lib.slugify(a.name)}.md"
+            count = 1
+            while handback.exists():
+                count += 1
+                handback = handback.with_name(f"{stamp}-{lib.slugify(a.name)}-{count}.md")
+            first = summary.splitlines()[0].lstrip("# ").strip()[:300]
+            day, line = lib.log_line(f"Hand-back from {a.name}: {first} (handbacks/{handback.name})", "finding", frm=a.name)
+            print(f"{'would write' if a.dry_run else 'write'}: {handback}")
+            print(f"{'would log' if a.dry_run else 'log'}: {line}")
+            if not a.dry_run:
+                lib.ensure_wiki(wiki, parent_name)
+                lib.write_atomic(handback, summary + "\n")
+                log = wiki / "log.md"
+                lib.write_atomic(log, lib.append_log(log.read_text(encoding="utf-8"), day, line))
         if not a.to and not session:
             print("not sent: no --to and no Session id for the parent in the org chart")
             return 1

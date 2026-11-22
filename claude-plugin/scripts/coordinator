@@ -103,6 +103,8 @@ def cmd_check(a, home):
             print(f"{name}: waits on someone ({agent['state']})")
     if asleep:
         print(f"{len(asleep)} asleep (skipped): {', '.join(asleep)}")
+    print("check cannot see a usage-limit stop (Orca calls it done). After a limit, `coordinator ls` lists every "
+          "awake one to look at.")
     return 0
 
 
@@ -161,7 +163,7 @@ def cmd_new(a, home):
     folder = lib.wiki_dir(home, slug)
     if any(lib.wiki_folder(home, r) == folder.resolve() for r in rows):
         raise lib.ConductorError(f"another coordinator already has the wiki {slug!r}: pass --wiki")
-    handover = read_handover(a.handover)
+    handover = a.handover_read
     line = f"| {name} | {owns} | `conductor/wiki/{slug}/` | {cs.AWAKE_CELL} | `{session}` |"
     if a.dry_run:
         print(f"would add: {line}")
@@ -227,7 +229,7 @@ def cmd_sleep(a, home):
 def cmd_wake(a, home):
     row = lib.find_coordinator(lib.org_rows(home), query=a.name)
     name, path = lib.display_name(row["name"]), lib.org_chart_file(home)
-    handover = read_handover(a.handover)
+    handover = a.handover_read
     live, _ = live_agents()
     sel = selector(a, live.get(row["session"]), home)
     asleep = cs.is_asleep_cell(row["state"])
@@ -286,7 +288,13 @@ def main(argv):
     s.set_defaults(fn=cmd_wake)
     a = p.parse_args(argv)
     try:
-        return a.fn(a, lib.home_repo())
+        home = lib.home_repo()
+        writes = a.cmd in ("new", "sleep", "wake") and not a.dry_run and (a.cmd != "new" or bool(a.session))
+        if a.cmd in ("new", "wake"):
+            a.handover_read = read_handover(a.handover)  # before the lock, which must not wait on stdin
+        # One lock round the chart and the shared worktree comment, from read to write.
+        with lib.locked(lib.org_chart_file(home).resolve().parent, on=writes):
+            return a.fn(a, home)
     except (lib.ConductorError, OSError) as e:
         print(f"coordinator: {e}", file=sys.stderr)
         return 1

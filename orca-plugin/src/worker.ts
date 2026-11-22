@@ -21,7 +21,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     roles: {},
     terminals: new Map(),
     workspaceIds: new Map(),
-    workspacePaths: new Map()
+    workspacePaths: new Map(),
+    workspaceNames: new Map()
   }
   let policyWarnings: string[] = []
   let script = ''
@@ -81,16 +82,22 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     }
   }
 
-  /** Learns every workspace's id and path and each agent's title, for the hooks. */
+  /** Learns every workspace's id, path and display name. */
+  async function scanWorkspaces() {
+    const { workspaces } = await orca.host.call('workspace.list', {})
+    for (const ws of workspaces) {
+      // One path on two hosts is ambiguous, so it names no workspace.
+      const known = snap.workspacePaths.get(ws.path)
+      snap.workspacePaths.set(ws.path, known === undefined || known === ws.id ? ws.id : null)
+      snap.workspaceNames.set(ws.id, ws.name)
+    }
+    return workspaces
+  }
+
+  /** Learns the workspaces and each agent's title, for the hooks. */
   async function scanAll(): Promise<void> {
     try {
-      const { workspaces } = await orca.host.call('workspace.list', {})
-      for (const ws of workspaces) {
-        // One path on two hosts is ambiguous, so it names no workspace.
-        const known = snap.workspacePaths.get(ws.path)
-        snap.workspacePaths.set(ws.path, known === undefined || known === ws.id ? ws.id : null)
-      }
-      for (const ws of workspaces) {
+      for (const ws of await scanWorkspaces()) {
         for (const row of await agentsIn(ws.id)) {
           remember(row.terminalId, { title: row.title, sessionId: row.sessionId, workspaceId: ws.id })
         }
@@ -198,9 +205,12 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   orca.events.on('workspace.created', (event) => {
     if (event.workspaceListId) snap.workspaceIds.set(event.workspaceId, event.workspaceListId)
+    // The event has no display name, and child-start's worker marker is in it.
+    scanWorkspaces().catch((error: Error) => orca.log(`scan failed: ${error.message}`))
   })
   orca.events.on('workspace.changed', ({ context }) => {
     focused = context ? { id: context.workspaceId ?? null, name: context.displayName || context.branch } : null
+    if (context?.workspaceId && context.displayName) snap.workspaceNames.set(context.workspaceId, context.displayName)
     for (const terminal of context?.terminals ?? []) {
       remember(terminal.id, { title: terminal.title, workspaceId: context?.workspaceId })
     }

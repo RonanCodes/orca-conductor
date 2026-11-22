@@ -40,6 +40,15 @@ test('leaves the command alone without a role, an entry or a claude word', () =>
   assert.equal(applyPolicy('claudette', 'worker', policy), 'claudette')
 })
 
+test('a resumed session keeps its model', () => {
+  const { policy } = parsePolicy('worker=sonnet:medium')
+  const resumes = ['--resume abc', '--resume=abc', '--resume', '-r abc', '-rabc', '--continue', '-c', '-pc', '--from-pr 12', '--teleport']
+  for (const flags of resumes) {
+    assert.equal(applyPolicy(`claude ${flags}`, 'worker', policy), `claude ${flags}`, flags)
+  }
+  assert.notEqual(applyPolicy("claude 'continue with -c please'", 'worker', policy), "claude 'continue with -c please'")
+})
+
 test('never edits a prompt or a folder that says claude', () => {
   const { policy } = parsePolicy('worker=sonnet')
   for (const command of ["myagent 'ask claude now'", 'echo claude', "run 'use claude here", 'cd /x/claude']) {

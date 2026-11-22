@@ -14,6 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.dont_write_bytecode = True
+for key in [k for k in os.environ if k.startswith("ORCA_")]:
+    del os.environ[key]  # the agent running the tests is not the agent under test
 os.environ["CONDUCTOR_ORCA"] = str(ROOT / "tests" / "no-orca-in-tests")  # no test may reach a live Orca
 sys.path.insert(0, str(ROOT / "scripts"))
 import conductor_lib as lib  # noqa: E402
@@ -43,9 +45,11 @@ class Roles(unittest.TestCase):
         self.assertIsNotNone(ask_gate.decide(payload, "worker", lambda: None))
         self.assertIsNone(ask_gate.decide(payload, "coordinator", lambda: None))
         self.assertIsNone(ask_gate.decide(payload, "", lambda: None))
-        self.assertIsNotNone(ask_gate.decide(payload, "", lambda: "worker"))
-        self.assertIsNone(ask_gate.decide(payload, "worker", lambda: "coordinator"))  # the title wins
-        self.assertIsNotNone(ask_gate.decide(payload, "coordinator", lambda: "worker"))
+        coordinator, worker = {"title": "🎖️ Docs"}, {"title": "🤖 task"}
+        self.assertIsNotNone(ask_gate.decide(payload, "", lambda: worker))
+        self.assertIsNone(ask_gate.decide(payload, "worker", lambda: coordinator))  # the title wins
+        self.assertIsNotNone(ask_gate.decide(payload, "coordinator", lambda: worker))
+        self.assertIsNone(ask_gate.decide(payload, "coordinator", lambda: worker, source="agent"))  # unless by hand
         self.assertIsNone(ask_gate.decide({"tool_name": "Bash"}, "worker", lambda: None))
 
 
@@ -140,9 +144,13 @@ class Compaction(unittest.TestCase):
                   {"orcaSessionId": "c", "state": "done", "updatedAt": 0},
                   {"orcaSessionId": "e", "state": "done", "updatedAt": 0, "kind": "chat"}]
         tokens = {"a": 400_000, "b": 500_000, "c": 10_000}
-        due, report = lib.compact_candidates(rows, agents, tokens.get, now_ms=10_000_000)
+        recorded = {"a": "t-a", "b": "t-b", "c": "t-c"}  # e's session never started with the plugin
+        due, report = lib.compact_candidates(rows, agents, now_ms=10_000_000,
+                                             transcript_for=lambda agent: recorded.get(agent["orcaSessionId"]),
+                                             tokens_for=lambda path: tokens[path[2:]])
         self.assertEqual([d["name"] for d in due], ["big idle"])
-        self.assertEqual([r["why"] for r in report][1:], ["busy (working)", "under 300,000 tokens", "asleep", "native chat: Orca does not expose its transcript"])
+        self.assertEqual([r["why"] for r in report][1:], ["busy (working)", "under 300,000 tokens", "asleep",
+                                                          "no count until the session has started with the plugin"])
 
     def test_context_tokens_reads_last_main_turn(self):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:

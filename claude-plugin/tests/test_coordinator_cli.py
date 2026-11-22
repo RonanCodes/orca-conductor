@@ -178,7 +178,14 @@ class Coordinator(unittest.TestCase):
         self.write_now()
         self.sleep()
         self.set_orca(agents=[])
-        self.assertEqual(self.run_it("check").stdout.strip(), "1 asleep (skipped): Docs")
+        self.assertIn("1 asleep (skipped): Docs", self.run_it("check").stdout)
+        self.assertNotIn("not listed by Orca", self.run_it("check").stdout)
+
+    def test_check_says_it_cannot_see_a_usage_limit_stop(self):
+        # Stopped on a limit: Orca says done, exactly like one that finished.
+        out = self.run_it("check").stdout
+        self.assertIn("cannot see a usage-limit stop", out)
+        self.assertIn("coordinator ls", out)
 
     def test_ls_json_is_what_the_panel_reads(self):
         row = json.loads(self.run_it("ls", "--json").stdout)["rows"][0]

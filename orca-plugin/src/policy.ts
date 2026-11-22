@@ -94,10 +94,17 @@ function splitCommand(command: string): Word[] | null {
   return words
 }
 
+/** A flag that opens an earlier session: -r and its value may be joined, and -c joined with -p. */
+function resumes(arg: string): boolean {
+  const flag = arg.split('=')[0]
+  return ['--resume', '--continue', '--from-pr', '--teleport'].includes(flag) || /^-r/.test(arg) || /^-p*cp*$/.test(arg)
+}
+
 /**
  * The command with the role's model and effort added after the `claude` executable. Unchanged when
- * the role has no entry, when that claude call already names both flags, or when `claude` is not
- * run as a command. The word claude in a prompt or a folder name is never touched.
+ * the role has no entry, when that claude call already names both flags, when it resumes or
+ * continues a session (which keeps its own model), or when `claude` is not run as a command. The
+ * word claude in a prompt or a folder name is never touched.
  */
 export function applyPolicy(command: string, role: Role | null, policy: Policy): string {
   if (role === null) return command
@@ -121,6 +128,7 @@ export function applyPolicy(command: string, role: Role | null, policy: Policy):
       if (arg.separator || arg.text === '--') break
       // A quoted word with a space is a prompt, whatever it starts with.
       if (arg.quoted && /\s/.test(arg.text)) continue
+      if (resumes(arg.text)) return command
       given.add(arg.text.split('=')[0])
     }
     const flags: string[] = []

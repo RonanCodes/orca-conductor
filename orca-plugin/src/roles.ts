@@ -38,6 +38,11 @@ export function readMarkers(settings: Record<string, unknown>): Markers {
   }
 }
 
+/** The markers as CONDUCTOR_MARKERS carries them: JSON, so a marker may hold a comma or an equals sign. */
+export function markersEnv(markers: Markers): string {
+  return JSON.stringify(markers)
+}
+
 /**
  * The role a title's leading marker names, or null. The conductor is checked first, because its
  * title may also carry the coordinator marker (for example "🎩 🎖️🎖️ Conductor"), so a sidebar

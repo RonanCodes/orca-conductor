@@ -31,16 +31,17 @@ def read(path):
 
 def cmd_add(a):
     path = lib.standards_file()
-    text = read(path) or lib.new_standards_file()
-    new_text, entry_id = lib.add_entry(text, a.text, title=a.title, source=a.source)
-    lib.write_atomic(path, new_text)
-    print(entry_id)
-    if a.commit:
-        repo = path.parent
-        subprocess.run(["git", "-C", str(repo), "add", "--", str(path)], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"docs(standards): {entry_id}", "--", str(path)],
-                       check=True)
-        print(f"committed {entry_id} (not pushed)")
+    with lib.locked(path.resolve().parent):
+        text = read(path) or lib.new_standards_file()
+        new_text, entry_id = lib.add_entry(text, a.text, title=a.title, source=a.source)
+        lib.write_atomic(path, new_text)
+        print(entry_id)
+        if a.commit:
+            repo = path.parent
+            subprocess.run(["git", "-C", str(repo), "add", "--", str(path)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"docs(standards): {entry_id}", "--", str(path)],
+                           check=True)
+            print(f"committed {entry_id} (not pushed)")
 
 
 def entries():
@@ -73,8 +74,9 @@ def cmd_hook(a):
     """Never fails loudly: a hook must not break the session."""
     try:
         path = lib.standards_file()
+        stamp = lib.read_stamp(path)  # before the read: a write between the two must still look newer
         text = read(path)
-        new = lib.once_per_session(a.state, lib.parse_entries(text), source_mtime=path.stat().st_mtime)
+        new = lib.once_per_session(a.state, lib.parse_entries(text), stamp_ns=stamp)
         if not new:
             return
         cap = int(os.environ.get("CONDUCTOR_STANDARDS_CAP", "1500"))

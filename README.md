@@ -5,8 +5,9 @@
 Two plugins in one repo, built on what Orca offers today. They are a stopgap for what
 [stablyai/orca#46872](https://github.com/stablyai/orca/issues/46872) asks Orca to support itself.
 
-> **Status: 0.1.0, not yet tried inside Orca.** The unit tests and validators pass. Neither plugin has been
-> installed or run against live chats. See [What is unverified](#what-is-unverified) before you rely on it.
+> **Status: 0.1.0, not yet tried inside Orca.** The tests and validators pass, and the scripts' reads were
+> tried on the real CLI. Neither plugin has been installed, and nothing has sent to or started a live agent.
+> See [What is unverified](#what-is-unverified) before you rely on it.
 
 ## The setup
 
@@ -87,15 +88,16 @@ wake implementation and not two.
 
 | Feature | Part | What it uses |
 | --- | --- | --- |
-| Roles, from a title marker or a palette command | Orca plugin | `storage:own`, `workspace.list`, `agents.list`, workspace events |
+| Roles, from a title marker, a palette command or the worker marker on a workspace's name | Orca plugin | `storage:own`, `workspace.list`, `agents.list`, workspace events |
 | Question gate on `AskUserQuestion` | both | hook `agent.tool.before`; in Claude Code a `PreToolUse` hook |
-| Model and effort by role | Orca plugin | hook `agent.launch.before`; an explicit `--model` or `--effort` wins |
+| Model and effort by role | Orca plugin | hook `agent.launch.before`; an explicit `--model` or `--effort` wins, and a resumed session is left alone |
 | Org chart panel | Orca plugin | a components panel, the `coordinator` script |
 | Sleep and wake, as marks | both | `orca worktree show` and `set --comment`, `orca agent list`, `orca terminal list`, `orca orchestration send` |
 | Standards every session sees once | Claude Code plugin | no Orca API: a file and Claude Code hooks |
 | Dated wiki per coordinator | Claude Code plugin | no Orca API: files in the home repo |
+| Child worker start | Claude Code plugin | `orca orchestration worker-start`, `orca agent list` |
 | Worker hand-back | Claude Code plugin | `orca orchestration send` |
-| Compaction check | Claude Code plugin | `orca agent list`, Claude Code transcripts of terminal agents |
+| Compaction check | Claude Code plugin | `orca agent list`, the transcript path a Claude Code hook records |
 
 <details>
 <summary>The scripts</summary>
@@ -107,11 +109,38 @@ They are in `claude-plugin/scripts/`. Each has `--help`.
 | `coordinator` | `ls`, `check`, `new`, `sleep`, `wake` |
 | `standards` | `add`, `ls`, `since`, `show`, `path` |
 | `wiki` | `where`, `init`, `log`, `now` |
+| `child-start` | `--name <task>`, `--repo`, `--role worker` or `reviewer`, spec on stdin, in `--spec` or `--spec-file`; `--dry-run` |
 | `child-done` | `--parent <coordinator>`, summary on stdin or in `--summary-file` |
 | `compact-check` | a dry run; `--ask-wiki` asks each due coordinator to write its wiki |
 
 `coordinator new` registers a chat you started. It starts none itself. It refuses with exit 3 when a sleeping
 coordinator fits, unless you add `--force-new`.
+
+`child-start` always starts Claude in a new child worktree with an explicit model alias (worker sonnet,
+reviewer opus, `--model` wins), the worker marker in its name and `child of <coordinator>` as its comment.
+It appends to the spec how to ask and the exact `child-done` command. If a start does not report ready, look
+with `orca orchestration worker-list` before starting it again.
+</details>
+
+<details>
+<summary>How the two question gates decide, and where they differ</summary>
+
+Both take the first of these, and let an agent with no role ask.
+
+1. A role set by hand on the agent.
+2. The marker at the start of its title.
+3. The role of its workspace.
+4. The worker marker on its workspace's name. A name never makes a coordinator or a conductor.
+
+The Claude Code hook cannot read Orca's plugin storage or settings, so the Orca plugin sends them in the
+environment when it launches Claude. These differences remain.
+
+- A role or setting changed after launch reaches the Orca gate only, until the agent is launched again.
+- A native chat, a restored agent and a resumed agent get no launch environment from the plugin. The Claude
+  Code hook then has the title, the workspace name, your own variables and the defaults.
+- Orca's list title and the terminal's title can differ, so the two can read different markers.
+- Either gate can deny. Turning the gate off in Orca reaches a running agent's Claude Code hook at its next
+  launch.
 </details>
 
 <details>
@@ -126,6 +155,8 @@ coordinator fits, unless you add `--force-new`.
 - **Neither touches the tab, worktree or process.** Orca has no sleep or wake API yet. The sidebar's Sleep
   acts on a whole workspace, so use it only for a coordinator that has the workspace to itself.
 - `coordinator check` and `compact-check` skip sleepers.
+- `coordinator check` cannot see a usage-limit stop: Orca calls it done. After a limit, go through every
+  awake coordinator in `coordinator ls`.
 - A delete, archive, remove, close, kill or stop subcommand exits 2.
 
 In the Orca panel sleep and wake are forms, because a palette command cannot take the required note.
@@ -142,13 +173,15 @@ The Orca plugin's settings are the gate switch, the roles that may ask, the mode
 | `CONDUCTOR_HOME` | the home repo |
 | `CONDUCTOR_STANDARDS_FILE` | a standards file somewhere else |
 | `CONDUCTOR_ORG_CHART` | an org chart somewhere else |
-| `CONDUCTOR_MARKERS` | `conductor=🎩,coordinator=🎖️,worker=🤖` |
+| `CONDUCTOR_MARKERS` | JSON, or `conductor=🎩,coordinator=🎖️,worker=🤖` |
 | `CONDUCTOR_ROLE` | this session's role when its title has no marker |
-| `CONDUCTOR_ASK_ROLES` | roles that may ask, default `conductor,coordinator` |
+| `CONDUCTOR_ROLE_SOURCE` | `agent` makes that role beat the title |
+| `CONDUCTOR_GATE` | `off` turns the Claude Code gate off |
+| `CONDUCTOR_ASK_ROLES` | roles that may ask, default `conductor,coordinator`; `none` for no role |
 | `CONDUCTOR_COORDINATOR` | which wiki the `wiki` script writes |
 | `CONDUCTOR_CHILD_NAME` | a worker's name in its hand-back |
 | `CONDUCTOR_STANDARDS_CAP` | characters of rules injected per turn, default 1500 |
-| `CONDUCTOR_STATE_DIR` | where the once-per-session state lives |
+| `CONDUCTOR_STATE_DIR` | where the once-per-session state and the recorded transcript paths live |
 | `CONDUCTOR_ORCA` | the `orca` executable |
 </details>
 
@@ -158,8 +191,9 @@ The Orca plugin's settings are the gate switch, the roles that may ask, the mode
 - The Orca plugin is a trusted worker, so it runs with your user account's access. It asks for
   `storage:own`, `settings:own`, `workspace:read` and `agent:read`, and runs one program: `python3` with the
   coordinator script you set.
-- The scripts run five Orca commands and refuse all others: `agent list`, `terminal list`, `worktree show`,
-  `worktree set` and `orchestration send`.
+- The scripts run six Orca commands and refuse all others: `agent list`, `terminal list`, `worktree show`,
+  `worktree set`, `orchestration send` and `orchestration worker-start`.
+- A hook stores each agent's transcript path on this machine, never the transcript.
 - The standards hook reads rules only from the home repo or file you configured, never from whichever repo a
   session is in, because that repo may not be yours.
 - `compact-check` reads token counts from local transcripts. Nothing here makes a network call of its own.
@@ -167,11 +201,29 @@ The Orca plugin's settings are the gate switch, the roles that may ask, the mode
 
 ## What is unverified
 
-- **Native chats:** whether Orca's `agent.tool.before` and Claude Code plugin hooks fire in them.
+Tried read-only on the real Orca 1.4.266 CLI: finding chats by session id and terminal agents by pane key,
+finding a terminal agent's mail handle, reading a worktree comment, counting one chat's transcript from a
+hand-fed hook payload, and a `child-start` dry run. Everything below was not tried.
+
+- **Any hook of either plugin inside a real session,** terminal or native chat. The tests and the smoke fed
+  them payloads by hand. Whether Orca's `agent.tool.before` and Claude Code plugin hooks fire in native
+  chats is unknown.
+- **`child-start` for real:** no worker was started. Whether Orca keeps the marker in the display name and
+  whether the worker's environment and first tool call reach the gates as the tests assume are unknown.
+- **The compaction count's freshness:** there is no count until the session has started with the plugin. A
+  nested `claude` in the same pane takes the record until the outer agent's next prompt, and a later agent
+  without the plugin in that pane shows the earlier agent's count.
+- **`/clear` in a terminal coordinator:** Orca then gives it a new session id, so its org chart row must be
+  edited by hand before wake, wiki and the compaction check find it again.
+- **A very slow `orca agent list`:** the Claude Code gate waits 8 seconds, then decides on the environment
+  alone, which lets an agent with no known role ask.
+- **Writers outside these scripts:** the locks protect only against each other. An edit of the org chart or
+  the worktree comment by hand or by another tool at the same moment can still be lost. Network file systems
+  were not tried.
 - **SSH and WSL:** Orca does not run `agent.tool.before` there.
 - **The plugin worker's `PATH`:** whether `python3` and `orca` are found from a real worker.
 - **Model by role in real launches.** Orca runs that hook for agent terminals only, not for restores or
-  resumes, and a brand-new child workspace usually has no role yet, so set one first.
+  resumes, and a brand-new child workspace may have no known role yet. `child-start` always passes a model.
 - **Title markers** when the agent's program replaces the tab title. Set the role by command in that case.
 - **Messages:** delivery to real and sleeping agents, and ambiguous recipients
   ([#45666](https://github.com/stablyai/orca/issues/45666)). `sent` means Orca took the message, not that the
@@ -195,7 +247,7 @@ The Orca plugin's settings are the gate switch, the roles that may ask, the mode
 - **Model policy by role:** [#46874](https://github.com/stablyai/orca/issues/46874).
 - **Create, sleep, wake and compact from a documented CLI or API:**
   [#46875](https://github.com/stablyai/orca/issues/46875). Sleep and wake here are marks, and the compaction
-  check only tells you where to type `/compact`. It cannot count a native chat's tokens.
+  check only tells you where to type `/compact`.
 - **Hand back, then close the child:** [#46876](https://github.com/stablyai/orca/issues/46876). `child-done`
   only hands back.
 - **Broadcast to every session:** [#43757](https://github.com/stablyai/orca/issues/43757). The standards hook

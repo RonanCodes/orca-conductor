@@ -3,7 +3,7 @@
 // Never through a shell: arguments go as an argv. Nothing here closes, stops or signals a process.
 
 import { spawn } from 'node:child_process'
-import type { Markers } from './roles.ts'
+import { markersEnv, type Markers } from './roles.ts'
 
 export type ScriptSetup = { script: string; home: string; markers: Markers }
 export type ScriptResult = { ok: boolean; stdout: string; output: string }
@@ -54,9 +54,7 @@ export function runCoordinator(setup: ScriptSetup, args: readonly string[], stdi
     const env = {
       ...process.env,
       CONDUCTOR_HOME: setup.home,
-      CONDUCTOR_MARKERS: Object.entries(setup.markers)
-        .map(([role, marker]) => `${role}=${marker}`)
-        .join(',')
+      CONDUCTOR_MARKERS: markersEnv(setup.markers)
     }
     const child = spawn('python3', [setup.script, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env })
     child.stdout.setEncoding('utf8')

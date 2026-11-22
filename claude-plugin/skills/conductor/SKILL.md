@@ -72,17 +72,19 @@ to every running session that has `CONDUCTOR_HOME`, so you do not message each c
 
 ## 6. Check (every few hours)
 
-1. `coordinator check` lists awake coordinators that need a look. Sleepers are skipped.
-2. `compact-check` (a dry run) lists terminal coordinators over the token threshold that are idle.
+1. `coordinator check` lists awake coordinators that wait on someone or that Orca does not list. Sleepers
+   are skipped. It cannot see a usage-limit stop, because Orca calls that done.
+2. `compact-check` (a dry run) lists coordinators over the token threshold that are idle. It has no count
+   until a coordinator's session has started with this plugin.
    `compact-check --ask-wiki` asks each to write its wiki. The person then types `/compact`: nothing
    here can compact another chat.
 3. Chase workers that finished without a hand-back. Their coordinator releases them.
 
 ## 7. After a usage limit or an account switch
 
-This plugin cannot resume agents. Tell the person which awake coordinators `coordinator check` lists,
-and let them resume each in Orca. Never report a coordinator as resumed until you have seen it take
-a turn.
+This plugin cannot resume agents, and `coordinator check` cannot see a limit stop: Orca shows it as done,
+like one that finished. Give the person every awake coordinator from `coordinator ls`, and let them look
+at each and resume it in Orca. Never report a coordinator as resumed until you have seen it take a turn.
 
 ## Questions for the person
 

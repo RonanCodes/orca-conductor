@@ -3,7 +3,7 @@
 // worker keeps this snapshot current and the hooks never await.
 
 import { applyPolicy, type Policy } from './policy.ts'
-import { askDecision, resolveRole, roleFromTitle, type Markers, type Role } from './roles.ts'
+import { askDecision, markersEnv, resolveRole, roleFromTitle, type Markers, type Role } from './roles.ts'
 
 export type Seen = { title: string | null; sessionId: string | null; workspaceId: string | null }
 
@@ -22,6 +22,8 @@ export type Snapshot = {
   workspaceIds: Map<string, string>
   /** A workspace path to its listed id, or null when two hosts share the path. */
   workspacePaths: Map<string, string | null>
+  /** A workspace's display name by listed id: child-start puts the worker marker in it. */
+  workspaceNames: Map<string, string>
 }
 
 /**
@@ -51,7 +53,10 @@ export function roleFor(
     (ids.terminalId ? snap.roles[`agent:${ids.terminalId}`] : undefined) ??
     null
   const title = roleFromTitle(ids.title ?? seen?.title ?? null, snap.markers)
-  const workspace = workspaceId ? (snap.roles[`workspace:${workspaceId}`] ?? null) : null
+  const byHand = workspaceId ? (snap.roles[`workspace:${workspaceId}`] ?? null) : null
+  // Last, and only for workers: a name must not hand every agent in that workspace the right to ask.
+  const byName = workspaceId ? roleFromTitle(snap.workspaceNames.get(workspaceId), snap.markers) : null
+  const workspace = byHand ?? (byName === 'worker' ? byName : null)
   const role = resolveRole({ agent, title, workspace })
   const source = role === null ? null : agent ? 'agent' : title ? 'title' : 'workspace'
   return { role, source }
@@ -80,12 +85,22 @@ export type LaunchEvent = {
 
 /** The launch event with the role's model policy and the role variables applied, or null to pass. */
 export function decideLaunch(snap: Snapshot, event: LaunchEvent): LaunchEvent | null {
-  const { role } = roleFor(snap, { terminalId: event.terminalId, workspaceId: event.workspaceId })
+  const { role, source } = roleFor(snap, { terminalId: event.terminalId, workspaceId: event.workspaceId })
   const env: Record<string, string> = { ...event.env }
-  if (role) env.CONDUCTOR_ROLE = role
+  if (role && source) {
+    env.CONDUCTOR_ROLE = role
+    // The Claude hook reads a title itself, and only a role set by hand on the agent beats it there.
+    env.CONDUCTOR_ROLE_SOURCE = source
+  }
   if (snap.homeRepoPath.trim() !== '') env.CONDUCTOR_HOME = snap.homeRepoPath.trim()
+  if (event.agent === 'claude') {
+    // The Claude hook cannot read Orca's settings, so they travel in the launch env.
+    env.CONDUCTOR_GATE = snap.gateEnabled ? 'on' : 'off'
+    env.CONDUCTOR_ASK_ROLES = snap.askRoles.join(',') || 'none'
+    env.CONDUCTOR_MARKERS = markersEnv(snap.markers)
+  }
   const command =
     snap.policyEnabled && event.agent === 'claude' ? applyPolicy(event.command, role, snap.policy) : event.command
-  const changed = command !== event.command || Object.keys(env).length !== Object.keys(event.env).length
+  const changed = command !== event.command || Object.keys(env).some((key) => env[key] !== event.env[key])
   return changed ? { ...event, command, env } : null
 }

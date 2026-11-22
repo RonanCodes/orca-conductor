@@ -30,6 +30,7 @@ test('the panel sleeps and wakes through the coordinator script, and roles reach
       return { dispose() {} }
     }
     const hostCalls: string[] = []
+    const workspaces = [{ id: 'identity:abc', path: '/srv/app-a', name: 'app repo A' }]
     const settings = {
       homeRepoPath: home,
       coordinatorScript: fileURLToPath(new URL('../../claude-plugin/scripts/coordinator', import.meta.url))
@@ -45,7 +46,7 @@ test('the panel sleeps and wakes through the coordinator script, and roles reach
         call: async (method: string) => {
           hostCalls.push(method)
           return method === 'workspace.list'
-            ? { workspaces: [{ id: 'identity:abc', path: '/srv/app-a' }] }
+            ? { workspaces }
             : { agents: [] }
         }
       },
@@ -63,6 +64,18 @@ test('the panel sleeps and wakes through the coordinator script, and roles reach
       tool: 'AskUserQuestion'
     })
     assert.match(denied.deny, /worker/)
+
+    // A new child: workspace.created has no name, so the worker reads it from workspace.list.
+    workspaces.push({ id: 'identity:child', path: '/srv/fix-index', name: '🤖 fix-index' })
+    const child = { workspaceId: 'repo::/srv/fix-index', workspaceListId: 'identity:child' }
+    on.get('event:workspace.created')({ ...child, kind: 'worktree', path: '/srv/fix-index', branch: 'fix-index' })
+    await new Promise((resolve) => setImmediate(resolve))
+    const childDenied = on.get('hook:agent.tool.before')({
+      agent: 'claude',
+      workspaceId: child.workspaceId,
+      tool: 'AskUserQuestion'
+    })
+    assert.match(childDenied?.deny ?? '', /worker/)
 
     const before = await on.get('panel:conductor.state')()
     assert.equal(before.org[0].asleep, false)

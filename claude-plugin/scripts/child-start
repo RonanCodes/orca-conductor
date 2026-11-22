@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""child-start: a coordinator starts one supervised worker in a new child worktree.
+
+  child-start --name NAME [--repo SELECTOR] [--coordinator Q] [--role worker|reviewer] [--model ALIAS]
+              [--effort LEVEL] [--spec TEXT | --spec-file FILE|-] [--dry-run]
+
+A thin wrapper over `orca orchestration worker-start`. The spec comes from --spec, --spec-file or stdin, and
+may not be empty. It always passes:
+  - --worktree new-child and --comment "child of <coordinator>"; --repo goes through as given,
+  - the worker marker in the display name and the task title, so the question gates see a worker,
+  - --agent claude and a --model alias: worker=sonnet, reviewer=opus. --model wins. --effort only when given.
+It appends to the spec how to ask and the exact child-done command that hands back.
+
+Which coordinator: --coordinator, else CONDUCTOR_COORDINATOR, else this agent's org chart row (a chat by its
+session id, a terminal agent by its pane key). --dry-run prints the command and the spec and starts nothing.
+"""
+import argparse, os, re, shlex, sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conductor_lib as lib  # noqa: E402
+
+CHILD_DONE = Path(__file__).resolve().parent / "child-done"
+MODELS = {"worker": "sonnet", "reviewer": "opus"}
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+START_TIMEOUT = 600  # it waits for a worktree, its setup and the agent
+
+
+def read_spec(a):
+    if a.spec is not None:
+        text = a.spec
+    elif a.spec_file and a.spec_file != "-":
+        text = Path(a.spec_file).read_text(encoding="utf-8")
+    else:
+        text = "" if sys.stdin.isatty() else sys.stdin.read()
+    if not text.strip():
+        raise lib.ConductorError("the spec is empty: give one goal and what done looks like")
+    return text.strip()
+
+
+def hand_back_command(home, parent, name):
+    env = [f"CONDUCTOR_HOME={shlex.quote(str(home.resolve()))}"]
+    chart = os.environ.get("CONDUCTOR_ORG_CHART", "").strip()
+    if chart:
+        env.append(f"CONDUCTOR_ORG_CHART={shlex.quote(str(Path(chart).expanduser().resolve()))}")
+    args = [str(CHILD_DONE), "--parent", parent, "--name", name]
+    return " ".join(env + [shlex.quote(arg) for arg in args])
+
+
+def full_spec(spec, coordinator, command):
+    return (f"{spec}\n\n"
+            "---\n"
+            f"You are a worker, a child of the coordinator {coordinator}.\n"
+            "- Never ask the person. Ask your coordinator, then end your turn until the answer comes:\n"
+            '  orca orchestration ask --question "<question>" --options "<a,b>"\n'
+            "- When done, hand back with exactly this command, with your summary on stdin (what changed, links,\n"
+            "  decisions, open questions), before you report worker_done:\n\n"
+            f"  {command}\n")
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="child-start", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--name", required=True)
+    p.add_argument("--repo")
+    p.add_argument("--coordinator")
+    p.add_argument("--role", choices=sorted(MODELS), default="worker")
+    p.add_argument("--model")
+    p.add_argument("--effort", choices=EFFORTS)
+    source = p.add_mutually_exclusive_group()
+    source.add_argument("--spec")
+    source.add_argument("--spec-file")
+    p.add_argument("--dry-run", action="store_true")
+    a = p.parse_args(argv)
+    try:
+        name = re.sub(r"\s+", " ", a.name).strip(" -")
+        if not name:
+            raise lib.ConductorError("give the worker a name")
+        model = a.model if a.model is not None else MODELS[a.role]
+        if not re.fullmatch(r"[a-z][a-z-]*", model) or model.startswith("claude-"):
+            raise lib.ConductorError(f"{model!r} is not a model alias (opus, sonnet, haiku), never a full id")
+        spec = read_spec(a)
+        home = lib.home_repo()
+        rows = lib.org_rows(home)
+        query = a.coordinator or os.environ.get("CONDUCTOR_COORDINATOR", "").strip() or None
+        row = lib.find_coordinator(rows, query=query, session=None if query else lib.own_session())
+        coordinator = lib.display_name(row["name"])
+        body = full_spec(spec, coordinator, hand_back_command(home, lib.wiki_of(home, row).name, name))
+        title = f"{lib.markers_from_env()['worker']} {name}"
+        args = ["orchestration", "worker-start", "--worktree", "new-child", "--agent", "claude", "--model", model]
+        if a.effort:
+            args += ["--effort", a.effort]
+        if a.repo:
+            args += ["--repo", a.repo]
+        args += ["--name", lib.slugify(name), "--display-name", title, "--task-title", title,
+                 "--comment", f"child of {coordinator}", "--spec-file", "-", "--json"]
+        if a.dry_run:
+            print("would run: orca " + " ".join(shlex.quote(arg) for arg in args))
+            print(f"spec on stdin:\n{body}", end="")
+            return 0
+        try:
+            out = lib.orca_call(args, stdin=body, timeout=START_TIMEOUT)
+            problem = None if out.returncode == 0 else (out.stdout + out.stderr).strip()[:2000]
+        except lib.ConductorError as e:
+            out, problem = None, str(e)
+        if problem is not None:
+            print(f"child-start: the start did not report ready: {problem}\n"
+                  "A worker may exist anyway. Look with `orca orchestration worker-list` before starting it again.",
+                  file=sys.stderr)
+            return 1
+        print(out.stdout.strip())
+        return 0
+    except (lib.ConductorError, OSError) as e:
+        print(f"child-start: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

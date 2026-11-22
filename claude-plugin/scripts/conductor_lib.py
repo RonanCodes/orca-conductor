@@ -9,8 +9,10 @@ The home repo holds everything that must outlive a chat:
 <home> is CONDUCTOR_HOME, else the git top level of the current folder when it has a `conductor/` folder
 (so a worker in an app repo never writes a second home there by accident).
 """
+import contextlib
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -27,7 +29,7 @@ DEFAULT_ASK_ROLES = ("conductor", "coordinator")
 ORG_HEADER = "| Coordinator | Owns | Wiki | Asleep/Awake | Session id |"
 ORG_RULE = "| --- | --- | --- | --- | --- |"
 ORCA_ALLOWED = {("agent", "list"), ("terminal", "list"), ("worktree", "show"), ("worktree", "set"),
-                ("orchestration", "send")}
+                ("orchestration", "send"), ("orchestration", "worker-start")}
 ENTRY_RE = re.compile(r"^### S-(\d+) [•·] (.+?) [•·] (.+)$")
 ENTRIES_HEADING = "## Entries"
 
@@ -91,6 +93,35 @@ def write_atomic(path, text):
             os.unlink(tmp)
 
 
+_held = set()
+
+
+@contextlib.contextmanager
+def locked(folder, on=True):
+    """Hold this folder for one read-modify-write. The lock is on the folder itself, so no lock file lands in
+    the home repo. Taking it again in the same process is fine. Lock order: the org chart, then a wiki."""
+    if not on:
+        yield
+        return
+    folder = Path(folder).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(folder), os.O_RDONLY)
+    try:
+        info = os.fstat(fd)
+        key = (info.st_dev, info.st_ino)
+        if key in _held:
+            yield
+            return
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _held.add(key)
+        try:
+            yield
+        finally:
+            _held.discard(key)
+    finally:
+        os.close(fd)
+
+
 # Orca -----------------------------------------------------------------------------------------
 
 def orca_call(args, stdin=None, timeout=20):
@@ -99,7 +130,7 @@ def orca_call(args, stdin=None, timeout=20):
     words = tuple(sleeping.command_words(args))
     if bad or words not in ORCA_ALLOWED:
         raise ConductorError(f"refused `orca {' '.join(words)}`: these scripts never delete, close, kill or stop, "
-                             "and run only agent list, terminal list, worktree show, worktree set and orchestration send")
+                             "and run only " + ", ".join(sorted(" ".join(w) for w in ORCA_ALLOWED)))
     exe = os.environ.get("CONDUCTOR_ORCA") or "orca"
     try:
         return subprocess.run([exe, *args], input=stdin if stdin is not None else "", capture_output=True,
@@ -122,6 +153,64 @@ def orca_json(args, timeout=20):
 
 def orca_agents(timeout=20):
     return orca_json(["agent", "list", "--json"], timeout).get("agents") or []
+
+
+def self_identity():
+    """(session id, pane key) of the agent this process runs in, either may be None. A chat has the session id.
+    A terminal agent has only the pane key; ORCA_AGENT_PANE is Orca's alias for when Claude scrubs *KEY* names."""
+    session = os.environ.get("ORCA_AGENT_SESSION_ID", "").strip()
+    pane = os.environ.get("ORCA_PANE_KEY", "").strip() or os.environ.get("ORCA_AGENT_PANE", "").strip()
+    return session or None, pane or None
+
+
+def self_agent(timeout=20):
+    """This agent's `orca agent list` row: by session id, else by pane key. None outside Orca or when unlisted."""
+    session, pane = self_identity()
+    if not (session or pane):
+        return None
+    agents = orca_agents(timeout)
+    for key, value in (("orcaSessionId", session), ("paneKey", pane)):
+        for agent in agents:
+            if value and agent.get(key) == value:
+                return agent
+    return None
+
+
+def own_session():
+    """This agent's Orca session id, which is what the org chart holds, or None."""
+    session, pane = self_identity()
+    if session or not pane:
+        return session
+    return (self_agent() or {}).get("orcaSessionId")
+
+
+def records_dir():
+    base = os.environ.get("CONDUCTOR_STATE_DIR", "").strip()
+    return (Path(base) if base else Path.home() / ".local" / "state" / "orca-conductor") / "agents"
+
+
+def record_file(kind, value):
+    return records_dir() / f"{kind}-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}.json"
+
+
+def record_transcript(transcript_path, claude_session):
+    """Record a hook payload's transcript under this agent: its session id, else its pane key."""
+    session, pane = self_identity()
+    if not (session or pane) or not transcript_path:
+        return
+    path = record_file("session", session) if session else record_file("pane", pane)
+    write_atomic(path, json.dumps({"transcript_path": str(transcript_path), "claude_session": claude_session}))
+
+
+def recorded_transcript(agent):
+    """The transcript this agent's hook recorded, or None. Never guessed from an Orca id."""
+    for kind, value in (("session", agent.get("orcaSessionId")), ("pane", agent.get("paneKey"))):
+        if value:
+            try:
+                return json.loads(record_file(kind, value).read_text(encoding="utf-8"))["transcript_path"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+    return None
 
 
 def mail_address(session, agents):
@@ -154,13 +243,17 @@ def _bare(text):
 
 
 def markers_from_env():
-    """CONDUCTOR_MARKERS='conductor=🎩,coordinator=🎖️,worker=🤖' overrides the defaults."""
+    """CONDUCTOR_MARKERS overrides the defaults: JSON, as the Orca plugin sends, or 'worker=🤖,conductor=🎩'."""
     markers = dict(DEFAULT_MARKERS)
-    for part in os.environ.get("CONDUCTOR_MARKERS", "").split(","):
-        if "=" in part:
-            role, marker = (p.strip() for p in part.split("=", 1))
-            if role in ROLES and marker:
-                markers[role] = marker
+    raw = os.environ.get("CONDUCTOR_MARKERS", "").strip()
+    try:
+        pairs = list(json.loads(raw).items())
+    except (ValueError, AttributeError):
+        pairs = [part.split("=", 1) for part in raw.split(",") if "=" in part]
+    for role, marker in pairs:
+        role, marker = str(role).strip(), str(marker).strip()
+        if role in ROLES and marker:
+            markers[role] = marker
     return markers
 
 
@@ -264,7 +357,7 @@ def format_entries(entries, cap=1500):
     return "\n\n".join(out)
 
 
-def once_per_session(state_path, entries, source_mtime=None):
+def once_per_session(state_path, entries, stamp_ns=None):
     """The entries this session has not been shown, and records them as shown.
 
     A new session (no state file, or a corrupt one) is marked as having seen everything up to now
@@ -283,12 +376,22 @@ def once_per_session(state_path, entries, source_mtime=None):
         fh.truncate()
         fh.write(json.dumps({"last_id": max(top, last or 0)}))
         fh.flush()
-        if source_mtime is not None:
-            # The state file's time is the standards file's, so the hook's `-nt` fast path holds until it changes.
-            os.utime(str(state_path), (source_mtime, source_mtime))
+        if stamp_ns is not None:
+            # The state file's time says which version was read, so the hook's `-nt` fast path holds (read_stamp).
+            os.utime(str(state_path), ns=(stamp_ns, stamp_ns))
     if last is None:
         return []
     return entries_since(entries, last)
+
+
+def read_stamp(path):
+    """The time to give a session's state. Take it before reading the file, so a later write is always newer.
+
+    bash 3.2's -nt compares whole seconds. A write in the second of our read would look no newer, so while
+    that second lasts the stamp is a second early and the hook reads again."""
+    now = int(time.time())
+    mtime = Path(path).stat().st_mtime_ns
+    return mtime - 1_000_000_000 if mtime // 1_000_000_000 >= now else mtime
 
 
 # Org chart ------------------------------------------------------------------------------------
@@ -386,9 +489,10 @@ def ensure_wiki(path, title):
         "now.md": f"# {title}: now\n\n_Updated {now_text()}_\n\n{NOW_STUB}\n",
         "log.md": f"# {title}: log\n\nDated decisions, findings, problems and preferences, oldest first.\n",
     }
-    for name, body in stubs.items():
-        if not (path / name).exists():
-            (path / name).write_text(body, encoding="utf-8")
+    with locked(path):
+        for name, body in stubs.items():
+            if not (path / name).exists():
+                write_atomic(path / name, body)
 
 
 def now_fresh(folder, agent, dry_run=False):
@@ -396,6 +500,11 @@ def now_fresh(folder, agent, dry_run=False):
     stamped only when Orca shows the coordinator idle; a working or unknown one must write it itself first."""
     if folder is None:
         return False, "it has no Wiki folder in the org chart, so its now.md cannot be checked"
+    with locked(folder, on=not dry_run and folder.is_dir()):
+        return _check_and_stamp_now(folder, agent, dry_run)
+
+
+def _check_and_stamp_now(folder, agent, dry_run):
     path = folder / "now.md"
     if not path.is_file():
         return False, f"{path} does not exist; the coordinator writes it first (`wiki now --set -`)"
@@ -471,10 +580,12 @@ def context_tokens(transcript_path):
     return last
 
 
-def compact_candidates(rows, agents, tokens_for, threshold=300_000, idle_seconds=120, now_ms=None):
+def compact_candidates(rows, agents, threshold=300_000, idle_seconds=120, now_ms=None,
+                       transcript_for=recorded_transcript, tokens_for=context_tokens):
     """Which awake coordinators (and the conductor) to compact: over the threshold and idle.
 
-    rows: org chart rows; agents: `orca agent list` rows; tokens_for(session) -> int or None.
+    rows: org chart rows; agents: `orca agent list` rows. transcript_for(agent) -> path or None, from what the
+    SessionStart hook recorded; tokens_for(path) -> int or None.
     Returns (eligible, report) where report has one dict per row with the reason.
     """
     now_ms = now_ms if now_ms is not None else time.time() * 1000
@@ -491,13 +602,14 @@ def compact_candidates(rows, agents, tokens_for, threshold=300_000, idle_seconds
             entry["why"] = "not running in Orca"
             continue
         entry["state"] = agent.get("state")
-        if agent.get("kind") == "chat":
-            entry["why"] = "native chat: Orca does not expose its transcript"
+        transcript = transcript_for(agent)
+        if not transcript:
+            entry["why"] = "no count until the session has started with the plugin"
             continue
-        tokens = tokens_for(r["session"])
+        tokens = tokens_for(transcript)
         entry["tokens"] = tokens
         if tokens is None:
-            entry["why"] = "no transcript found"
+            entry["why"] = "its recorded transcript has no count yet"
         elif tokens <= threshold:
             entry["why"] = f"under {threshold:,} tokens"
         elif agent.get("state") != "done":
