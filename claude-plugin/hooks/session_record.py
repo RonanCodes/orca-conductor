@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """session_record: records which transcript this agent writes, for compact-check.
 
 An Orca session id does not name a Claude transcript, so this hook saves the payload's transcript_path under

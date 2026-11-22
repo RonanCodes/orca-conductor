@@ -56,7 +56,8 @@ export function runCoordinator(setup: ScriptSetup, args: readonly string[], stdi
       CONDUCTOR_HOME: setup.home,
       CONDUCTOR_MARKERS: markersEnv(setup.markers)
     }
-    const child = spawn('python3', [setup.script, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env })
+    // -I: never import from the folder it runs in, or from PYTHONPATH.
+    const child = spawn('python3', ['-I', setup.script, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk) => {

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """ask_gate: PreToolUse hook on AskUserQuestion. Only some roles may ask the person a question.
 
 For agents the Orca plugin's agent.tool.before hook may not reach (SSH hosts, other launchers, and perhaps

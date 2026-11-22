@@ -38,7 +38,7 @@ class Coordinator(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CONDUCTOR_", "ORCA_"))}
         env.update(CONDUCTOR_HOME=str(self.home), CONDUCTOR_ORCA=str(ROOT / "tests" / "fake_orca.py"),
                    FAKE_ORCA_STATE=str(self.state))
-        return subprocess.run([sys.executable, str(ROOT / "scripts" / "coordinator"), *args], input=stdin,
+        return subprocess.run([sys.executable, "-I", str(ROOT / "scripts" / "coordinator"), *args], input=stdin,
                               capture_output=True, text=True, env=env)
 
     def write_now(self, age_hours=0):

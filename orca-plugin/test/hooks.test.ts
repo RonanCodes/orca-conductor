@@ -99,7 +99,7 @@ test('both gates agree on the env this plugin sends', () => {
   for (const [index, s] of cases.entries()) {
     const at = { agent: 'claude', workspaceId: 'w', terminalId: 't1' }
     const env = decideLaunch(s, { ...at, command: 'claude', env: {} })?.env ?? {}
-    const hook = spawnSync('python3', [gate], {
+    const hook = spawnSync('python3', ['-I', gate], {
       input: JSON.stringify({ tool_name: 'AskUserQuestion' }),
       env: { ...clean, ...env, CONDUCTOR_ORCA: '/nonexistent-orca' },
       encoding: 'utf8'

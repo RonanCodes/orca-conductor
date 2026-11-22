@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """A stand-in for the orca CLI in tests. It records every call and never talks to Orca.
 
 State is the JSON file FAKE_ORCA_STATE names: agents, terminals, comment, fail (commands to fail),

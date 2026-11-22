@@ -33,7 +33,8 @@ home repo/
 ## Install
 
 You need macOS or Linux, Orca 1.4.260 or newer, Claude Code, `python3` 3.9 or newer, and the `orca` CLI on
-your `PATH`.
+your `PATH`. The scripts start Python isolated (`-I`) from their first line, which needs an `env` with `-S`
+(macOS, or GNU coreutils 8.30 or newer). Only macOS was tested.
 
 1. Clone this repo, and make or pick a home repo.
 
@@ -167,6 +168,7 @@ In the Orca panel sleep and wake are forms, because a palette command cannot tak
 
 The Orca plugin's settings are the gate switch, the roles that may ask, the model policy
 (`role=alias:effort`, aliases only), the three markers, the home repo folder and the coordinator script.
+A launch written `env A=1 claude` gets no model policy (`A=1 claude` does).
 
 | Variable | What it does |
 | --- | --- |
@@ -189,7 +191,7 @@ The Orca plugin's settings are the gate switch, the roles that may ask, the mode
 <summary>What it can access</summary>
 
 - The Orca plugin is a trusted worker, so it runs with your user account's access. It asks for
-  `storage:own`, `settings:own`, `workspace:read` and `agent:read`, and runs one program: `python3` with the
+  `storage:own`, `settings:own`, `workspace:read` and `agent:read`, and runs one program: `python3 -I` with the
   coordinator script you set.
 - The scripts run six Orca commands and refuse all others: `agent list`, `terminal list`, `worktree show`,
   `worktree set`, `orchestration send` and `orchestration worker-start`.
@@ -263,7 +265,7 @@ node --test test/*.test.ts
 orca plugin types . && tsc -p .
 orca plugin validate . && orca plugin check .
 cd ..
-python3 -m unittest discover -s claude-plugin/tests
+python3 -I -m unittest discover -s claude-plugin/tests
 claude plugin validate .
 ```
 

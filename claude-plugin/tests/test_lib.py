@@ -1,6 +1,6 @@
 """Unit tests for the pure logic in scripts/conductor_lib.py and hooks/ask_gate.py.
 
-Run: python3 -m unittest discover -s claude-plugin/tests
+Run: python3 -I -m unittest discover -s claude-plugin/tests
 """
 import importlib.util
 import json
@@ -183,7 +183,7 @@ class Scripts(unittest.TestCase):
     def run_script(self, home, *args, stdin=""):
         env = {**os.environ, "CONDUCTOR_HOME": str(home), "CONDUCTOR_NOW": "2026-01-02 10:00"}
         env.pop("ORCA_AGENT_SESSION_ID", None)
-        return subprocess.run([sys.executable, str(ROOT / "scripts" / args[0]), *args[1:]], input=stdin,
+        return subprocess.run([sys.executable, "-I", str(ROOT / "scripts" / args[0]), *args[1:]], input=stdin,
                               capture_output=True, text=True, env=env)
 
     def test_wiki_and_child_done_flow(self):
@@ -205,7 +205,7 @@ class Scripts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             subprocess.run(["git", "init", "-q", repo], check=True)
             env = {k: v for k, v in os.environ.items() if not k.startswith("CONDUCTOR_")}
-            out = subprocess.run([sys.executable, str(ROOT / "scripts" / "standards"), "add", "x"], cwd=repo, env=env,
+            out = subprocess.run([sys.executable, "-I", str(ROOT / "scripts" / "standards"), "add", "x"], cwd=repo, env=env,
                                  capture_output=True, text=True)
             self.assertEqual(out.returncode, 1)
             self.assertFalse((Path(repo) / "conductor").exists())
