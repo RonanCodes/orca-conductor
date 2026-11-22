@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""standards: numbered standing rules in the home repo, shown once to every running session.
+
+  standards add "<text>" [--title T] [--source S] [--commit]
+                           add an entry at the top, print its id (S-001, S-002, ...);
+                           --commit commits only this file in the home repo (never pushes)
+  standards ls [-n N]      list entries, newest first
+  standards since <id>     every entry newer than <id>, oldest first, in full
+  standards show <id>      one entry
+  standards path           print the file's path
+  standards hook --event E --state FILE
+                           internal, for hooks/standards-inject.sh: prints hook JSON or nothing
+
+File: CONDUCTOR_STANDARDS_FILE, else <home repo>/conductor/standards.md.
+Env: CONDUCTOR_STANDARDS_CAP (characters injected per turn, default 1500), CONDUCTOR_NOW (tests).
+"""
+import argparse, json, os, subprocess, sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conductor_lib as lib  # noqa: E402
+
+
+def read(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def cmd_add(a):
+    path = lib.standards_file()
+    text = read(path) or lib.new_standards_file()
+    new_text, entry_id = lib.add_entry(text, a.text, title=a.title, source=a.source)
+    lib.write_atomic(path, new_text)
+    print(entry_id)
+    if a.commit:
+        repo = path.parent
+        subprocess.run(["git", "-C", str(repo), "add", "--", str(path)], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"docs(standards): {entry_id}", "--", str(path)],
+                       check=True)
+        print(f"committed {entry_id} (not pushed)")
+
+
+def entries():
+    return lib.parse_entries(read(lib.standards_file()))
+
+
+def show(e):
+    print(f"### {e['id']} • {e['when']} • {e['title']}\n{e['body']}\n")
+
+
+def cmd_ls(a):
+    for e in entries()[: a.n]:
+        print(f"{e['id']}  {e['when']}  {e['title']}")
+
+
+def cmd_since(a):
+    for e in lib.entries_since(entries(), lib.parse_id(a.id)):
+        show(e)
+
+
+def cmd_show(a):
+    num = lib.parse_id(a.id)
+    hit = [e for e in entries() if e["num"] == num]
+    if not hit:
+        raise lib.ConductorError(f"No entry {a.id}")
+    show(hit[0])
+
+
+def cmd_hook(a):
+    """Never fails loudly: a hook must not break the session."""
+    try:
+        path = lib.standards_file()
+        text = read(path)
+        new = lib.once_per_session(a.state, lib.parse_entries(text), source_mtime=path.stat().st_mtime)
+        if not new:
+            return
+        cap = int(os.environ.get("CONDUCTOR_STANDARDS_CAP", "1500"))
+        ctx = ("📣 New standing rules from the conductor. Apply them like your instruction files:\n\n"
+               + lib.format_entries(new, cap))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": a.event, "additionalContext": ctx}}))
+    except Exception:  # noqa: BLE001
+        return
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="standards", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("add"); s.add_argument("text"); s.add_argument("--title"); s.add_argument("--source")
+    s.add_argument("--commit", action="store_true"); s.set_defaults(fn=cmd_add)
+    s = sub.add_parser("ls"); s.add_argument("-n", type=int, default=20); s.set_defaults(fn=cmd_ls)
+    s = sub.add_parser("since"); s.add_argument("id"); s.set_defaults(fn=cmd_since)
+    s = sub.add_parser("show"); s.add_argument("id"); s.set_defaults(fn=cmd_show)
+    s = sub.add_parser("path"); s.set_defaults(fn=lambda a: print(lib.standards_file()))
+    s = sub.add_parser("hook"); s.add_argument("--event", default="PostToolUse"); s.add_argument("--state", required=True)
+    s.set_defaults(fn=cmd_hook)
+    a = p.parse_args(argv)
+    try:
+        a.fn(a)
+    except (lib.ConductorError, OSError, subprocess.CalledProcessError) as e:
+        print(f"standards: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

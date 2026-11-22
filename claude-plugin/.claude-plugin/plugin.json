@@ -1,0 +1,10 @@
+{
+  "name": "orca-conductor",
+  "version": "0.1.0",
+  "description": "A conductor and chiefs-of-staff way of running Orca: routing and sleep/wake skills, a standards feed every session sees once, coordinator wikis, worker hand-back, a compaction check, and a role gate on AskUserQuestion.",
+  "author": { "name": "RonanCodes", "url": "https://github.com/RonanCodes" },
+  "homepage": "https://github.com/RonanCodes/orca-conductor",
+  "repository": "https://github.com/RonanCodes/orca-conductor",
+  "license": "MIT",
+  "keywords": ["orca", "orchestration", "chief-of-staff", "multi-agent"]
+}

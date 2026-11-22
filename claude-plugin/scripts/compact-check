@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""compact-check: list coordinators (and the conductor) over a token threshold and idle. Dry run by default.
+
+  compact-check [--threshold N] [--idle-seconds S] [--json] [--ask-wiki]
+
+Reads the org chart, `orca agent list --json` and, for terminal Claude agents, the transcript
+(<config dir>/projects/*/<session>.jsonl; CLAUDE_CONFIG_DIR or ~/.claude). One is due when it is awake, over
+the threshold (default 300000) and `done` for at least --idle-seconds (default 120). Sleepers are skipped.
+
+It never compacts: Orca has no CLI or API for that (stablyai/orca#46875), and an agent cannot run /compact on
+itself. --ask-wiki messages each due one to write its wiki, and you then type /compact in that chat.
+Native chats are listed without a token count, because Orca does not expose their transcript.
+"""
+import argparse, glob, json, os, sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conductor_lib as lib  # noqa: E402
+
+MESSAGE = ("compact-check: your context is over the threshold and you are idle. Write your wiki now "
+           "(wiki now --set -, and a wiki log line for anything new), then say it is safe to compact.")
+
+
+def transcript_tokens(session):
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    hits = glob.glob(str(base / "projects" / "*" / f"{glob.escape(session)}.jsonl"))
+    if not hits:
+        return None
+    return lib.context_tokens(max(hits, key=os.path.getmtime))
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="compact-check", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--threshold", type=int, default=300_000)
+    p.add_argument("--idle-seconds", type=int, default=120)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--ask-wiki", action="store_true")
+    a = p.parse_args(argv)
+    try:
+        eligible, report = lib.compact_candidates(lib.org_rows(lib.home_repo()), lib.orca_agents(), transcript_tokens,
+                                                  threshold=a.threshold, idle_seconds=a.idle_seconds)
+        if a.json:
+            print(json.dumps({"due": [e["name"] for e in eligible], "rows": report}, indent=2))
+        else:
+            for r in report:
+                tokens = f"{r['tokens']:,}" if r["tokens"] else "-"
+                print(f"{'DUE ' if r['why'] == 'due' else '    '}{r['name'][:48]:48} {tokens:>10}  {r['why']}")
+            if not a.ask_wiki:
+                print(f"\n{len(eligible)} due. Dry run: nothing sent (add --ask-wiki).")
+        if not a.ask_wiki:
+            return 0
+        failed = 0
+        for e in eligible:
+            problem = lib.send_mail(e["session"], "Write your wiki before compaction", MESSAGE + "\n")
+            failed += bool(problem)
+            print(f"not asked: {e['name']}: {problem}" if problem else f"asked: {e['name']}",
+                  file=sys.stderr if a.json else sys.stdout)
+        return 1 if failed else 0
+    except (lib.ConductorError, OSError) as e:
+        print(f"compact-check: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

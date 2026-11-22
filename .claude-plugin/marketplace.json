@@ -1,0 +1,12 @@
+{
+  "name": "orca-conductor",
+  "description": "A conductor and chiefs-of-staff setup for Orca, packaged for Claude Code.",
+  "owner": { "name": "RonanCodes", "url": "https://github.com/RonanCodes" },
+  "plugins": [
+    {
+      "name": "orca-conductor",
+      "source": "./claude-plugin",
+      "description": "Conductor and chief-of-staff skills, standards feed, coordinator wikis, hand-back, compaction check, AskUserQuestion role gate."
+    }
+  ]
+}

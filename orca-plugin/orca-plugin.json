@@ -1,0 +1,64 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "conductor",
+  "name": "Conductor",
+  "version": "0.1.0",
+  "description": "Run Orca as one conductor over long-lived coordinators and short-lived workers: roles, a question gate, model by role, and an org chart with sleep and wake. Coordinators are never deleted.",
+  "author": {
+    "name": "RonanCodes",
+    "url": "https://github.com/RonanCodes"
+  },
+  "repository": "https://github.com/RonanCodes/orca-conductor",
+  "homepage": "https://github.com/RonanCodes/orca-conductor",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.260"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "settings:own" },
+    { "kind": "workspace:read" },
+    { "kind": "agent:read" }
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "conductor",
+        "title": "Conductor",
+        "icon": "agent",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "commands": [
+      { "id": "role.coordinator", "title": "Conductor: Make this workspace a coordinator workspace", "when": "workspace" },
+      { "id": "role.worker", "title": "Conductor: Make this workspace a worker workspace", "when": "workspace" },
+      { "id": "role.conductor", "title": "Conductor: Make this workspace the conductor workspace", "when": "workspace" },
+      { "id": "role.clear", "title": "Conductor: Clear this workspace's role", "when": "workspace" }
+    ],
+    "events": [
+      { "on": "agent.status.changed" },
+      { "on": "workspace.created" },
+      { "on": "workspace.changed" }
+    ],
+    "hooks": [
+      { "event": "agent.tool.before", "onError": "pass" },
+      { "event": "agent.launch.before", "onError": "pass" }
+    ],
+    "settings": [
+      { "key": "gateEnabled", "title": "Question gate", "description": "Turn away AskUserQuestion from roles that may not ask the person, and point the agent at its coordinator.", "type": "boolean", "default": true },
+      { "key": "askRoles", "title": "Roles that may ask the person", "description": "Comma-separated: conductor, coordinator, worker.", "type": "string", "default": "conductor, coordinator" },
+      { "key": "modelPolicyEnabled", "title": "Model by role", "description": "Add --model and --effort to a Claude launch from the policy below. An explicit --model or --effort always wins.", "type": "boolean", "default": true },
+      { "key": "modelPolicy", "title": "Model policy", "description": "role=alias:effort, separated by semicolons. Aliases only (opus, sonnet, haiku), never a full model id.", "type": "string", "default": "conductor=opus:high; coordinator=opus:high; worker=sonnet:medium" },
+      { "key": "markerConductor", "title": "Conductor title marker", "description": "A chat whose title starts with this is the conductor.", "type": "string", "default": "🎩" },
+      { "key": "markerCoordinator", "title": "Coordinator title marker", "description": "A chat whose title starts with this is a coordinator (chief of staff).", "type": "string", "default": "🎖️" },
+      { "key": "markerWorker", "title": "Worker title marker", "description": "A chat whose title starts with this is a worker another agent started.", "type": "string", "default": "🤖" },
+      { "key": "homeRepoPath", "title": "Home repo folder", "description": "Absolute path of the home repo. Needed for the org chart, sleep and wake. Also passed to launched agents as CONDUCTOR_HOME.", "type": "string", "default": "" },
+      { "key": "coordinatorScript", "title": "Coordinator script", "description": "Absolute path of scripts/coordinator from the orca-conductor Claude Code plugin. The org chart, sleep and wake run it with python3.", "type": "string", "default": "" }
+    ]
+  }
+}

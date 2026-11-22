@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""wiki: a coordinator's dated wiki in the home repo, so compacting or replacing the chat loses nothing.
+
+  wiki where                         print this coordinator's wiki folder
+  wiki init <slug> ["<title>"]       create the folder with index.md, now.md and log.md
+  wiki log "<claim>" --kind K [--source URL] [--from NAME]
+                                     append a dated line to log.md (K: decision, finding, problem, preference)
+  wiki now [--set FILE|-]            print now.md; --set replaces its body (stamped with the time)
+
+Which coordinator: --coordinator <wiki slug or name>, else CONDUCTOR_COORDINATOR, else the org chart row
+whose Session id is ORCA_AGENT_SESSION_ID. The folder is that row's Wiki cell, or
+<home repo>/conductor/wiki/<slug>/ while there is no org chart yet.
+"""
+import argparse, os, sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conductor_lib as lib  # noqa: E402
+
+
+def resolve(a, home):
+    query = a.coordinator or os.environ.get("CONDUCTOR_COORDINATOR", "").strip() or None
+    rows = lib.org_rows(home)
+    if query:
+        known = lib.wiki_dir(home, lib.slugify(query))
+        if lib.slugify(query) == query and (known.is_dir() or not rows):
+            return known, query
+    row = lib.find_coordinator(rows, query=query, session=os.environ.get("ORCA_AGENT_SESSION_ID"))
+    return lib.wiki_of(home, row), lib.display_name(row["name"])
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="wiki", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--coordinator")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("where")
+    s = sub.add_parser("init"); s.add_argument("slug"); s.add_argument("title", nargs="?")
+    s = sub.add_parser("log"); s.add_argument("claim"); s.add_argument("--kind", required=True)
+    s.add_argument("--source"); s.add_argument("--from", dest="frm")
+    s = sub.add_parser("now"); s.add_argument("--set", dest="set_from")
+    a = p.parse_args(argv)
+    try:
+        home = lib.home_repo()
+        if a.cmd == "init":
+            path = lib.wiki_dir(home, lib.slugify(a.slug))
+            lib.ensure_wiki(path, a.title or a.slug)
+            print(path)
+            return 0
+        path, title = resolve(a, home)
+        lib.ensure_wiki(path, title)
+        if a.cmd == "where":
+            print(path)
+        elif a.cmd == "log":
+            day, line = lib.log_line(a.claim, a.kind, source=a.source, frm=a.frm)
+            log = path / "log.md"
+            log.write_text(lib.append_log(log.read_text(encoding="utf-8"), day, line), encoding="utf-8")
+            print(line)
+        elif a.cmd == "now":
+            now = path / "now.md"
+            if a.set_from:
+                body = sys.stdin.read() if a.set_from == "-" else Path(a.set_from).read_text(encoding="utf-8")
+                now.write_text(f"# {title}: now\n\n_Updated {lib.now_text()}_\n\n{body.strip()}\n", encoding="utf-8")
+            print(now.read_text(encoding="utf-8"), end="")
+    except (lib.ConductorError, OSError) as e:
+        print(f"wiki: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

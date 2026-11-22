@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""child-done: a worker hands its work back to its coordinator as its last step.
+
+  child-done --parent <wiki slug or name> [--summary-file FILE] [--name CHILD] [--to HANDLE] [--dry-run]
+
+Reads the summary from --summary-file or stdin (what changed, links, decisions, open questions), then:
+  1. saves it whole as <parent wiki>/handbacks/<date>-<child>.md,
+  2. appends one dated `finding` line to the parent's log.md that links it,
+  3. sends it to the parent with `orca orchestration send`: to --to, else to the parent in the org chart
+     (a chat by its session id, a terminal agent by its terminal handle).
+The coordinator then reads it and releases the worker in Orca. This script ends, closes and renames nothing,
+and leaves the worktree comment alone (that is where sleep notes live). --dry-run changes nothing.
+"""
+import argparse, datetime as dt, os, sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conductor_lib as lib  # noqa: E402
+
+
+def main(argv):
+    p = argparse.ArgumentParser(prog="child-done", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--parent", required=True)
+    p.add_argument("--summary-file")
+    p.add_argument("--name", default=os.environ.get("CONDUCTOR_CHILD_NAME") or "worker")
+    p.add_argument("--to")
+    p.add_argument("--dry-run", action="store_true")
+    a = p.parse_args(argv)
+    try:
+        summary = (Path(a.summary_file).read_text(encoding="utf-8") if a.summary_file else sys.stdin.read()).strip()
+        if not summary:
+            raise lib.ConductorError("The summary is empty: write what changed, links, decisions and open questions.")
+        home = lib.home_repo()
+        rows = lib.org_rows(home)
+        if rows:
+            row = lib.find_coordinator(rows, query=a.parent)
+            wiki, parent_name, session = lib.wiki_of(home, row), lib.display_name(row["name"]), row["session"]
+        else:
+            wiki, parent_name, session = lib.wiki_dir(home, lib.slugify(a.parent)), a.parent, ""
+        stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
+        handback = wiki / "handbacks" / f"{stamp}-{lib.slugify(a.name)}.md"
+        count = 1
+        while handback.exists():
+            count += 1
+            handback = handback.with_name(f"{stamp}-{lib.slugify(a.name)}-{count}.md")
+        first = summary.splitlines()[0].lstrip("# ").strip()[:300]
+        day, line = lib.log_line(f"Hand-back from {a.name}: {first} (handbacks/{handback.name})", "finding", frm=a.name)
+        print(f"{'would write' if a.dry_run else 'write'}: {handback}")
+        print(f"{'would log' if a.dry_run else 'log'}: {line}")
+        if not a.dry_run:
+            lib.ensure_wiki(wiki, parent_name)
+            handback.parent.mkdir(parents=True, exist_ok=True)
+            handback.write_text(summary + "\n", encoding="utf-8")
+            log = wiki / "log.md"
+            log.write_text(lib.append_log(log.read_text(encoding="utf-8"), day, line), encoding="utf-8")
+        if not a.to and not session:
+            print("not sent: no --to and no Session id for the parent in the org chart")
+            return 1
+        if a.dry_run:
+            print(f"would send to {a.to or parent_name}")
+            return 0
+        body = f"{summary}\n\nSaved at {handback}\n"
+        problem = lib.send_mail(session, f"Hand-back from {a.name}", body, to=a.to)
+        if problem:
+            print(f"not sent (the hand-back is saved): {problem}")
+            return 1
+        print(f"sent to {a.to or parent_name}")
+        return 0
+    except (lib.ConductorError, OSError) as e:
+        print(f"child-done: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
